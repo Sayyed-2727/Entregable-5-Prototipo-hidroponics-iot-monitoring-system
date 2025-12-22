@@ -2,7 +2,115 @@
   "version": 1,
   "author": "Miguel Puch Paíno",
   "editor": "wokwi",
-  "parts": [ { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} } ],
-  "connections": [ [ "esp:TX", "$serialMonitor:RX", "", [] ], [ "esp:RX", "$serialMonitor:TX", "", [] ] ],
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": -4.76, "attrs": {} },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht22",
+      "top": -153.3,
+      "left": -216.6,
+      "attrs": { "temperature": "24", "humidity": "45" }
+    },
+    {
+      "type": "wokwi-photoresistor-sensor",
+      "id": "ldr1",
+      "top": 41.6,
+      "left": -575.2,
+      "attrs": { "lux": "500" }
+    },
+    {
+      "type": "wokwi-slide-potentiometer",
+      "id": "pot_nivel",
+      "top": -215.8,
+      "left": -29.8,
+      "attrs": { "value": "70" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_riego",
+      "top": 246,
+      "left": -169,
+      "attrs": { "color": "blue" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_nutrientes",
+      "top": 188.4,
+      "left": 291.8,
+      "attrs": { "color": "green" }
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": 256,
+      "left": 159.2,
+      "attrs": { "pins": "i2c" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn_modo",
+      "top": -109,
+      "left": 278.4,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot_control",
+      "top": -87.7,
+      "left": 451,
+      "attrs": { "value": "512" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 99.95,
+      "left": -76.8,
+      "attrs": { "value": "330" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r2",
+      "top": 109.55,
+      "left": 230.4,
+      "attrs": { "value": "330" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r3",
+      "top": -15.25,
+      "left": -316.8,
+      "attrs": { "value": "10000" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "dht22:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "dht22:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "dht22:SDA", "esp:15", "green", [ "v0" ] ],
+    [ "ldr1:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "ldr1:GND", "esp:GND.1", "black", [ "v86", "h403.05" ] ],
+    [ "ldr1:AO", "esp:34", "orange", [ "v0" ] ],
+    [ "pot_nivel:VCC", "esp:3V3", "red", [ "h-19.2", "v201.6" ] ],
+    [ "pot_nivel:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "pot_nivel:SIG", "esp:35", "yellow", [ "h-38.4", "v191.2" ] ],
+    [ "led_riego:A", "r1:1", "blue", [ "h19.2", "v-182.4" ] ],
+    [ "r1:2", "esp:25", "blue", [ "v0" ] ],
+    [ "led_riego:C", "esp:GND.1", "black", [ "v19.2", "h125.2", "v-153.6" ] ],
+    [ "led_nutrientes:A", "r2:1", "green", [ "h9.6", "v-115.2" ] ],
+    [ "r2:2", "esp:26", "green", [ "v0" ] ],
+    [ "led_nutrientes:C", "esp:GND.1", "black", [ "h-28.4", "v-76.8" ] ],
+    [ "lcd:GND", "esp:GND.1", "black", [ "v0" ] ],
+    [ "lcd:VCC", "esp:5V", "red", [ "v0.1", "h-163.35" ] ],
+    [ "lcd:SDA", "esp:21", "cyan", [ "h-19.2", "v-230.2" ] ],
+    [ "lcd:SCL", "esp:22", "white", [ "h-38.4", "v-268.5" ] ],
+    [ "btn_modo:1.l", "esp:32", "orange", [ "h-297.6", "v182.4" ] ],
+    [ "btn_modo:2.l", "esp:GND.2", "black", [ "v0.2", "h-182.4" ] ],
+    [ "pot_control:VCC", "esp:3V3", "red", [ "h-500", "v48" ] ],
+    [ "pot_control:GND", "esp:GND.2", "black", [ "v0" ] ],
+    [ "pot_control:SIG", "esp:33", "yellow", [ "v0" ] ],
+    [ "ldr1:DO", "r3:1", "gray", [ "v0" ] ],
+    [ "r3:2", "esp:GND.1", "black", [ "v163.2", "h257.85" ] ]
+  ],
   "dependencies": {}
 }

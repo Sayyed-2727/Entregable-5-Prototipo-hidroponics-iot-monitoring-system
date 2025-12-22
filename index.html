@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<!--
+=========================================================================
+DASHBOARD IOT - INVERNADERO HIDROPÓNICO
+=========================================================================
+
+Sistema web de monitoreo y control en tiempo real para invernadero
+hidropónico basado en ESP32, comunicación MQTT y visualización web.
+
+Autor: Miguel Puch Paíno
+Versión: 1.0
+Fecha: Diciembre 2025
+
+Estructura del dashboard:
+- Header: Título, estado MQTT y botón configuración
+- Sección sensores: 5 tarjetas (Temperatura, Humedad, Luz, Agua, Umbral)
+- Sección estado: Modo de operación, actuadores, configuración
+- Registro de eventos: Log de acciones y alertas
+- Footer: Información del proyecto
+
+Tecnologías:
+- HTML5 semántico
+- CSS3 con variables personalizadas
+- JavaScript vanilla + mqtt.js
+- WebSocket para comunicación MQTT
+=========================================================================
+-->
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard IoT - Invernadero Hidropónico</title>
+    
+    <!-- Estilos personalizados -->
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- Biblioteca MQTT.js para comunicación WebSocket -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- 
+        =====================================================
+        HEADER - Título y estado de conexión MQTT
+        ===================================================== 
+        -->
+        <header class="header">
+            <div class="header-content">
+                <h1>🌱 Dashboard IoT - Invernadero Hidropónico</h1>
+                <div class="connection-status">
+                    <!-- Badge de estado MQTT (actualizado dinámicamente) -->
+                    <span id="mqtt-status" class="status-badge disconnected">
+                        <span class="status-dot"></span>
+                        MQTT Desconectado
+                    </span>
+                </div>
+            </div>
+            <p class="subtitle">Sistema de Control Automático de Riego y Dosificación de Nutrientes</p>
+        </header>
+
+        <!-- 
+        =====================================================
+        DASHBOARD PRINCIPAL
+        ===================================================== 
+        -->
+        <main class="dashboard">
+            <!-- 
+            =================================================
+            SECCIÓN 1: MONITOREO DE SENSORES
+            5 tarjetas con valores en tiempo real
+            ================================================= 
+            -->
+            <section class="section sensors-section">
+                <h2 class="section-title">📊 Monitoreo de Sensores</h2>
+                <div class="cards-grid">
+                    <!-- Temperatura -->
+                    <div class="card">
+                        <div class="card-icon temperature-icon">🌡️</div>
+                        <div class="card-content">
+                            <h3 class="card-title">Temperatura</h3>
+                            <div class="card-value" id="temperatura">--</div>
+                            <div class="card-unit">°C</div>
+                        </div>
+                        <div class="card-bar">
+                            <div class="bar-fill temperature-bar" id="temperatura-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- Humedad -->
+                    <div class="card">
+                        <div class="card-icon humidity-icon">💧</div>
+                        <div class="card-content">
+                            <h3 class="card-title">Humedad</h3>
+                            <div class="card-value" id="humedad">--</div>
+                            <div class="card-unit">%</div>
+                        </div>
+                        <div class="card-bar">
+                            <div class="bar-fill humidity-bar" id="humedad-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- Luz -->
+                    <div class="card">
+                        <div class="card-icon light-icon">☀️</div>
+                        <div class="card-content">
+                            <h3 class="card-title">Nivel de Luz</h3>
+                            <div class="card-value" id="luz">--</div>
+                            <div class="card-unit">%</div>
+                        </div>
+                        <div class="card-bar">
+                            <div class="bar-fill light-bar" id="luz-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- Nivel de Agua -->
+                    <div class="card">
+                        <div class="card-icon water-icon">🚰</div>
+                        <div class="card-content">
+                            <h3 class="card-title">Nivel de Agua</h3>
+                            <div class="card-value" id="nivel-agua">--</div>
+                            <div class="card-unit">%</div>
+                        </div>
+                        <div class="card-bar">
+                            <div class="bar-fill water-bar" id="nivel-agua-bar"></div>
+                        </div>
+                        <div class="card-alert" id="agua-alert"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Sección de Estado del Sistema -->
+            <section class="section status-section">
+                <h2 class="section-title">⚙️ Estado del Sistema</h2>
+                <div class="cards-grid status-grid">
+                    <!-- Modo de Operación -->
+                    <div class="card status-card">
+                        <div class="status-header">
+                            <h3 class="card-title">Modo de Operación</h3>
+                            <div class="mode-badge" id="modo-badge">AUTO</div>
+                        </div>
+                        <div class="mode-description" id="modo-description">
+                            Control automático basado en sensores
+                        </div>
+                    </div>
+
+                    <!-- Estado de Bombas -->
+                    <div class="card status-card">
+                        <h3 class="card-title">Estado de Actuadores</h3>
+                        <div class="pumps-status">
+                            <div class="pump-item">
+                                <div class="pump-indicator" id="bomba-riego-indicator">
+                                    <span class="pump-dot"></span>
+                                </div>
+                                <span class="pump-label">Bomba de Riego</span>
+                                <span class="pump-status" id="bomba-riego-status">Inactiva</span>
+                            </div>
+                            <div class="pump-item">
+                                <div class="pump-indicator" id="bomba-nutrientes-indicator">
+                                    <span class="pump-dot"></span>
+                                </div>
+                                <span class="pump-label">Bomba de Nutrientes</span>
+                                <span class="pump-status" id="bomba-nutrientes-status">Inactiva</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Configuración -->
+                    <div class="card status-card">
+                        <h3 class="card-title">Configuración Actual</h3>
+                        <div class="config-info">
+                            <div class="config-item">
+                                <span class="config-label">Umbral de Humedad (%):</span>
+                                <span class="config-value" id="umbral-humedad">30%</span>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">WiFi:</span>
+                                <span class="config-status" id="wifi-status">🔴 Desconectado</span>
+                            </div>
+                            <div class="config-item">
+                                <span class="config-label">Última Actualización:</span>
+                                <span class="config-value" id="ultima-actualizacion">--</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Panel de Control -->
+            <section class="section control-section">
+                <h2 class="section-title">🎮 Panel de Control</h2>
+                <div class="control-panel">
+                    <!-- Control de Modo -->
+                    <div class="card control-card">
+                        <h3 class="card-title">Seleccionar Modo</h3>
+                        <div class="mode-buttons">
+                            <button class="mode-btn" data-mode="AUTO" id="btn-auto">
+                                <span class="btn-icon">🤖</span>
+                                <span class="btn-text">AUTO</span>
+                            </button>
+                            <button class="mode-btn" data-mode="ECO" id="btn-eco">
+                                <span class="btn-icon">🌿</span>
+                                <span class="btn-text">ECO</span>
+                            </button>
+                            <button class="mode-btn" data-mode="MANUAL" id="btn-manual">
+                                <span class="btn-icon">🎮</span>
+                                <span class="btn-text">MANUAL</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Control Manual de Bombas -->
+                    <div class="card control-card" id="manual-controls">
+                        <h3 class="card-title">Control Manual de Bombas</h3>
+                        <div class="manual-switches">
+                            <div class="switch-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="switch-riego" disabled>
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">Bomba de Riego</span>
+                            </div>
+                            <div class="switch-item">
+                                <label class="switch">
+                                    <input type="checkbox" id="switch-nutrientes" disabled>
+                                    <span class="slider"></span>
+                                </label>
+                                <span class="switch-label">Bomba de Nutrientes</span>
+                            </div>
+                        </div>
+                        <div class="manual-info">
+                            <p>⚠️ El control manual solo está disponible en modo MANUAL</p>
+                        </div>
+                    </div>
+
+                </div>
+            </section>
+
+            <!-- Registro de Eventos -->
+            <section class="section log-section">
+                <h2 class="section-title">📝 Registro de Eventos</h2>
+                <div class="card log-card">
+                    <div class="log-container" id="log-container">
+                        <div class="log-entry log-info">
+                            <span class="log-time">--:--:--</span>
+                            <span class="log-message">Sistema iniciado. Esperando conexión MQTT...</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Sistema IoT de Invernadero Hidropónico - Miguel Puch Paíno © 2025</p>
+            <p class="footer-note">Dashboard Web con MQTT sobre WebSockets</p>
+        </footer>
+    </div>
+
+    <!-- Modal de Configuración MQTT -->
+    <div class="modal" id="mqtt-config-modal">
+        <div class="modal-content">
+            <h2>⚙️ Configuración MQTT</h2>
+            <div class="form-group">
+                <label>Broker MQTT:</label>
+                <input type="text" id="mqtt-broker" value="ws://test.mosquitto.org:8080/mqtt" class="form-input">
+            </div>
+            <div class="form-group">
+                <label>Cliente ID:</label>
+                <input type="text" id="mqtt-client-id" readonly class="form-input">
+            </div>
+            <button class="connect-btn" id="connect-btn">Conectar</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
