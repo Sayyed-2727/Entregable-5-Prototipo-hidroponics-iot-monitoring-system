@@ -3,23 +3,35 @@
  * Control automático de riego y dosificación de nutrientes
  * con WiFi, MQTT y pantalla LCD.
  *
- * Arquitectura refactorizada con FreeRTOS y drivers ESP-IDF para una
- * gestión de tareas, precisión y consumo energético optimizados.
+ * Arquitectura basada en FreeRTOS y drivers ESP-IDF para optimizar
+ * la gestión de tareas, la precisión del ADC y el consumo energético.
  *
  * Autor 1: Miguel Puch Paíno
  * Autor 2: Sayed Magdy Elsayed Abdellah
  * Fecha: Diciembre 2025
  */
 
-// Librerías de alto nivel (Arduino)
+// --- Librerías Arduino (Alto Nivel) ---
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <DHT.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <ArduinoJson.h>
+#include <queue>
+#include <WebServer.h>
+#include <WebSocketsServer.h>
 
-// Headers ESP-IDF para control de bajo nivel
+// --- Estructuras de Datos ---
+struct MqttMessage {
+  String topic;
+  String payload;
+};
+std::queue<MqttMessage> mqttMessageBuffer;
+const unsigned int MQTT_BUFFER_MAX_SIZE = 20; // Almacenar hasta 20 mensajes pendientes
+
+
+// --- Librerías ESP-IDF (Bajo Nivel) ---
 #include "driver/timer.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
@@ -77,15 +89,20 @@ DHT dht(DHT_PIN, DHT_TYPE);
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
+WebServer server(80);
+WebSocketsServer webSocket(81);
 
-// Handles de Tareas y Sincronización
+// --- Handles de Tareas y Sincronización (FreeRTOS) ---
 TaskHandle_t xTaskControlLogicHandle = NULL;
+TaskHandle_t xTaskMqttHandlerHandle = NULL;
+TaskHandle_t xTaskWebServerHandle = NULL;
+TaskHandle_t xTaskUpdateLcdHandle = NULL;
 SemaphoreHandle_t xDataMutex;
 SemaphoreHandle_t xButtonSemaphore;
 EventGroupHandle_t wifi_event_group;
 const int WIFI_CONNECTED_BIT = BIT0;
 
-// ADC
+// --- Configuración ADC ---
 esp_adc_cal_characteristics_t adc_chars;
 const adc_atten_t atten = ADC_ATTEN_DB_11;
 const adc_bits_width_t width = ADC_WIDTH_BIT_12;
@@ -96,39 +113,39 @@ const adc_bits_width_t width = ADC_WIDTH_BIT_12;
 enum Modo { AUTO, ECO, MANUAL };
 const char* modoNombres[] = {"AUTO", "ECO", "MANUAL"};
 
-// --- Estado RTC (persiste durante deep sleep) ---
+// --- Estado RTC (Persistente en Deep Sleep) ---
 struct rtc_state_t {
   Modo modoActual = AUTO;
   unsigned long ultimoRiego = 0;
 };
 RTC_DATA_ATTR rtc_state_t rtcState;
 
-// --- Variables de estado en RAM (sincronizadas desde RTC) ---
+// --- Variables de Estado en RAM ---
 Modo modoActual = AUTO;
 unsigned long ultimoRiego = 0;
 
-// --- Variables de Sensores (protegidas por mutex) ---
+// --- Variables de Sensores (Protegidas por Mutex) ---
 float temperatura = 0;
 float humedad = 0;
 int luzPorcentaje = 0;
 int nivelAguaPorcentaje = 0;
 
-// --- Variables de Actuadores (protegidas por mutex) ---
+// --- Variables de Actuadores (Protegidas por Mutex) ---
 bool bombaRiegoActiva = false;
 bool bombaNutrientesActiva = false;
 
-// --- Parámetros Configurables (protegidos por mutex) ---
+// --- Parámetros de Control (Configurables) ---
 int umbralHumedadMin = 50;
 int umbralHumedadMax = 70;
 int umbralLuzMin = 20;
 int nivelAguaCritico = 20;
 unsigned long intervaloRiego = 30000;
-// Intervalo para despertar de deep sleep en modo ECO (en microsegundos)
+// Intervalo de despertar en modo ECO (microsegundos)
 uint64_t intervaloRiegoEco = 60000000; 
 unsigned long duracionRiego = 10000;
 unsigned long duracionRiegoEco = 5000;
 
-// --- Control de Tiempo (usado por la lógica de control) ---
+// --- Variables de Temporización ---
 unsigned long tiempoInicioRiego = 0;
 
 // --- Riego Manual ---
@@ -137,22 +154,73 @@ bool nutrientesManualActivo = false;
 
 // ==================== DECLARACIÓN DE TAREAS Y FUNCIONES ====================
 
-// --- Tareas FreeRTOS ---
+// --- Prototipos de Tareas FreeRTOS ---
 void taskMqttHandler(void *pvParameters);
 void taskReadSensors(void *pvParameters);
 void taskReadControls(void *pvParameters);
 void taskButtonHandler(void *pvParameters);
 void taskControlLogic(void *pvParameters);
 void taskUpdateLcd(void *pvParameters);
+void taskWebServer(void *pvParameters);
 
-// --- Funciones de Configuración (ESP-IDF) ---
+// --- Dashboard HTML ---
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html>
+<head>
+  <title>Invernadero Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: Arial; text-align: center; margin:0px auto; padding-top: 30px; }
+    .card { box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2); transition: 0.3s; width: 90%; margin: auto; margin-bottom: 20px; padding: 20px; }
+    .value { font-size: 2rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Invernadero IoT</h2>
+  <div class="card">
+    <h3>Sensores</h3>
+    <p>Temp: <span id="temp">--</span> &deg;C</p>
+    <p>Hum: <span id="hum">--</span> %</p>
+    <p>Luz: <span id="luz">--</span> %</p>
+    <p>Agua: <span id="agua">--</span> %</p>
+  </div>
+  <div class="card">
+    <h3>Estado</h3>
+    <p>Modo: <span id="modo">--</span></p>
+    <p>Riego: <span id="riego">--</span></p>
+  </div>
+  <script>
+  var gateway = `ws://${window.location.hostname}:81/`;
+  var websocket;
+  function initWebSocket() {
+    websocket = new WebSocket(gateway);
+    websocket.onmessage = onMessage;
+  }
+  function onMessage(event) {
+    var data = JSON.parse(event.data);
+    if(data.temp) document.getElementById('temp').innerHTML = data.temp.toFixed(1);
+    if(data.hum) document.getElementById('hum').innerHTML = data.hum.toFixed(1);
+    if(data.luz) document.getElementById('luz').innerHTML = data.luz;
+    if(data.agua) document.getElementById('agua').innerHTML = data.agua;
+    if(data.modo) document.getElementById('modo').innerHTML = data.modo;
+    if(data.riego !== undefined) document.getElementById('riego').innerHTML = data.riego ? "ON" : "OFF";
+  }
+  window.onload = initWebSocket;
+  </script>
+</body>
+</html>
+)rawliteral";
+
+// --- Prototipos de Funciones de Configuración (ESP-IDF) ---
 void configurarADC();
 void configurarControlBombas();
 void configurarTimerControl();
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
 void configurarWiFiEficiente();
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
+void broadcastWebSocketData();
 
-// --- Funciones de Lógica y Control ---
+// --- Prototipos de Funciones de Lógica y Control ---
 void restaurarEstadoRTC();
 void entrarModoBajoConsumo();
 void mostrarMensajeBienvenida();
@@ -171,7 +239,7 @@ void actualizarBombas();
 void actualizarLCD();
 void publicarDatosMQTT();
 
-// --- Rutinas de Servicio de Interrupción (ISRs) ---
+// --- Prototipos de ISRs (Interrupt Service Routines) ---
 static void IRAM_ATTR handleButtonInterrupt(void* arg);
 bool IRAM_ATTR timerControlISR(void *args);
 
@@ -182,17 +250,24 @@ void setup() {
   delay(1000);
   Serial.println("\n\n=== Sistema IoT Invernadero Hidropónico con ESP-IDF ===");
 
-  // Comprobar la causa del reinicio
+  // Verificar la fuente de despertar (Wakeup Source)
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
   if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
     Serial.println("Despertando de Deep Sleep (Timer).");
     restaurarEstadoRTC();
+  } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("Despertando de Deep Sleep (Botón).");
+    restaurarEstadoRTC();
+    // Al despertar por botón, forzamos el cambio de modo para evitar
+    // volver a dormir inmediatamente. Transición: ECO -> MANUAL.
+    modoActual = MANUAL; 
+    rtcState.modoActual = modoActual;
   } else {
     Serial.println("Inicio en frío (Power on).");
-    // No es necesario hacer nada, rtcState tiene los valores por defecto
+    // Inicio normal: rtcState se inicializa con valores por defecto
   }
 
-  // Sincronizar estado de RAM con RTC al inicio
+  // Sincronizar variables de RAM con el estado recuperado del RTC
   modoActual = rtcState.modoActual;
   ultimoRiego = rtcState.ultimoRiego;
 
@@ -208,13 +283,22 @@ void setup() {
   Wire.begin(21, 22);
   delay(100);
   lcd.init();
-  lcd.backlight();
+  // Gestión del LCD según el modo de operación
+  if (modoActual != ECO) {
+    lcd.backlight();
+  }
   Serial.println("LCD inicializado.");
   
-  // Conectar WiFi y MQTT solo si no estamos en modo ECO al despertar
+  // Inicialización de comunicaciones (WiFi/MQTT/Web) si no es modo ECO
   if (modoActual != ECO || wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
       mostrarMensajeBienvenida();
       conectarWiFi();
+      
+      // Iniciar Dashboard solo si hay WiFi
+      server.on("/", HTTP_GET, []() { server.send(200, "text/html", index_html); });
+      server.begin();
+      webSocket.begin();
+      webSocket.onEvent(webSocketEvent);
   } else {
       Serial.println("Omitiendo conexión WiFi/MQTT en despertar ECO.");
   }
@@ -223,7 +307,7 @@ void setup() {
   mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
 
-  // --- Creación de Mutex y Semáforos ---
+  // --- Creación de Primitivas de Sincronización ---
   xDataMutex = xSemaphoreCreateMutex();
   xButtonSemaphore = xSemaphoreCreateBinary();
 
@@ -240,32 +324,50 @@ void setup() {
   gpio_isr_handler_add(BOTON_MODO_PIN, handleButtonInterrupt, NULL);
   Serial.println("Interrupción de botón (ESP-IDF) configurada.");
 
-  // Iniciar timer de hardware para la lógica de control
-  configurarTimerControl();
-  Serial.println("Timer de hardware para control lógico iniciado.");
+  // Iniciar timer de hardware para la lógica de control solo si no estamos en modo ECO
+  if (modoActual != ECO) {
+    configurarTimerControl();
+    Serial.println("Timer de hardware para control lógico iniciado.");
+  } else {
+    configurarTimerControl(); // Configurar, pero no iniciar
+    timer_pause(TIMER_GROUP_0, TIMER_0);
+    Serial.println("Modo ECO: Timer de control configurado pero pausado.");
+  }
 
   // --- Creación de Tareas FreeRTOS ---
   Serial.println("Creando tareas de FreeRTOS...");
-  xTaskCreatePinnedToCore(taskMqttHandler, "MqttHandler", 4096, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(taskMqttHandler, "MqttHandler", 4096, NULL, 2, &xTaskMqttHandlerHandle, 0);
   xTaskCreatePinnedToCore(taskReadSensors, "ReadSensors", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskReadControls, "ReadControls", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskButtonHandler, "ButtonHandler", 2048, NULL, 3, NULL, 1);
-  xTaskCreatePinnedToCore(taskUpdateLcd, "UpdateLcd", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(taskUpdateLcd, "UpdateLcd", 4096, NULL, 1, &xTaskUpdateLcdHandle, 1);
+  xTaskCreatePinnedToCore(taskWebServer, "WebServer", 4096, NULL, 1, &xTaskWebServerHandle, 1);
   // Crear la tarea de control y guardar su handle para la notificación del timer
   xTaskCreatePinnedToCore(taskControlLogic, "ControlLogic", 4096, NULL, 2, &xTaskControlLogicHandle, 1);
   
+  // GESTIÓN DE ENERGÍA CORRECTA:
+  // Si estamos en modo ECO, suspendemos inmediatamente las tareas que no deben correr
+  if (modoActual == ECO) {
+      Serial.println("Modo ECO: Suspendiendo tareas de comunicación y UI.");
+      vTaskSuspend(xTaskMqttHandlerHandle);
+      vTaskSuspend(xTaskUpdateLcdHandle);
+      vTaskSuspend(xTaskWebServerHandle);
+      lcd.noBacklight();
+      lcd.noDisplay();
+  }
+
   Serial.println("Sistema inicializado. El planificador de FreeRTOS tiene el control.");
-  vTaskDelete(NULL); // Eliminar la tarea de setup/loop
+  vTaskDelete(NULL); // La tarea setup finaliza, el scheduler toma el control
 }
 
 // ==================== BUCLE PRINCIPAL (VACÍO) ====================
 void loop() {
-  // No hacer nada aquí. El planificador de FreeRTOS se encarga de todo.
+  // El loop está vacío porque la ejecución se gestiona mediante tareas FreeRTOS.
 }
 
 // ==================== RUTINAS DE SERVICIO DE INTERRUPCIÓN (ISRs) ====================
 
-// ISR para el botón de cambio de modo (API ESP-IDF)
+// ISR: Manejador de interrupción del botón (Cambio de Modo)
 static void IRAM_ATTR handleButtonInterrupt(void* arg) {
   BaseType_t xHigherPriorityTaskWoken = pdFALSE;
   xSemaphoreGiveFromISR(xButtonSemaphore, &xHigherPriorityTaskWoken);
@@ -274,7 +376,7 @@ static void IRAM_ATTR handleButtonInterrupt(void* arg) {
   }
 }
 
-// ISR para el timer de hardware que notifica a la tarea de control
+// ISR: Timer de Hardware (Sincronización de Lógica de Control)
 bool IRAM_ATTR timerControlISR(void *args) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     // Notificar a la tarea de control que es hora de ejecutarse
@@ -290,7 +392,7 @@ void taskMqttHandler(void *pvParameters) {
   const TickType_t publishInterval = pdMS_TO_TICKS(5000);
 
   for (;;) {
-    // Esperar a que la WiFi esté conectada
+    // Bloquear hasta que WiFi esté conectado
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     
     if (!mqttClient.connected()) {
@@ -331,19 +433,20 @@ void taskReadControls(void *pvParameters) {
 
 void taskButtonHandler(void *pvParameters) {
   for (;;) {
-    // 1. Esperar a que la interrupción señale una posible pulsación del botón.
+    // 1. Esperar notificación del semáforo (desde ISR).
     if (xSemaphoreTake(xButtonSemaphore, portMAX_DELAY) == pdTRUE) {
       
-      // 2. Retardo para antirrebote (debounce).
+      // 2. Filtro de rebotes (Debounce).
       vTaskDelay(pdMS_TO_TICKS(50));
 
-      // 3. Confirmar que el botón sigue presionado después del retardo.
+      // 3. Verificación del estado físico del botón.
       if (gpio_get_level(BOTON_MODO_PIN) == 0) {
         
         Serial.println("Interrupt: Pulsación de botón confirmada.");
         
-        // 4. Actualizar el modo de forma segura usando el mutex.
+        // 4. Sección Crítica: Actualización del modo de operación.
         if (xSemaphoreTake(xDataMutex, portMAX_DELAY) == pdTRUE) {
+          Modo modoAnterior = modoActual;
           modoActual = (Modo)((modoActual + 1) % 3);
           Serial.print("Modo cambiado a: "); Serial.println(modoNombres[modoActual]);
           
@@ -351,18 +454,48 @@ void taskButtonHandler(void *pvParameters) {
             riegoManualActivo = false;
             nutrientesManualActivo = false;
           }
+
+          // Gestión de transiciones de energía (ECO vs Activo)
+          if (modoActual == ECO) {
+            // Entrando a ECO: Pausar timer y suspender tareas.
+            timer_pause(TIMER_GROUP_0, TIMER_0);
+            
+            // Suspender tareas de comunicación e interfaz
+            vTaskSuspend(xTaskMqttHandlerHandle);
+            vTaskSuspend(xTaskUpdateLcdHandle);
+            vTaskSuspend(xTaskWebServerHandle);
+            lcd.noBacklight();
+            lcd.noDisplay();
+            esp_wifi_stop(); // Apagar radio WiFi para ahorro máximo
+            
+            Serial.println("Modo ECO: Timer de control pausado.");
+          } else if (modoAnterior == ECO) {
+            // Saliendo de ECO: Reactivar timer y tareas.
+            timer_start(TIMER_GROUP_0, TIMER_0);
+            Serial.println("Saliendo de ECO: Timer de control reactivado.");
+            
+            // Reiniciar radio WiFi y reanudar tareas
+            esp_wifi_start();
+            vTaskResume(xTaskMqttHandlerHandle);
+            vTaskResume(xTaskUpdateLcdHandle);
+            vTaskResume(xTaskWebServerHandle);
+            
+            if (!(xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT)) {
+               conectarWiFi();
+            }
+          }
           
           xSemaphoreGive(xDataMutex);
         }
 
-        // 5. Esperar a que el botón se suelte para registrarlo como una única pulsación.
+        // 5. Esperar liberación del botón.
         while (gpio_get_level(BOTON_MODO_PIN) == 0) {
           vTaskDelay(pdMS_TO_TICKS(50));
         }
       }
       
-      // 6. Después de gestionar la pulsación y liberación, limpiar cualquier 
-      //    interrupción remanente de rebotes que pudieran haber ocurrido.
+      // 6. Limpiar semáforo para descartar interrupciones generadas
+      //    durante el procesamiento (rebotes finales).
       while(xSemaphoreTake(xButtonSemaphore, 0) == pdTRUE);
     }
   }
@@ -370,7 +503,7 @@ void taskButtonHandler(void *pvParameters) {
 
 void taskControlLogic(void *pvParameters) {
   for (;;) {
-    // Esperar notificación del timer de hardware en lugar de usar vTaskDelay
+    // Esperar notificación directa desde el Timer ISR (Sincronización precisa)
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     
     unsigned long tiempoActual = millis();
@@ -389,10 +522,21 @@ void taskControlLogic(void *pvParameters) {
 void taskUpdateLcd(void *pvParameters) {
   for (;;) {
     if (xSemaphoreTake(xDataMutex, portMAX_DELAY) == pdTRUE) {
+      // Actualizar pantalla (esta tarea se suspende en modo ECO)
+      lcd.display();
+      lcd.backlight();
       actualizarLCD();
       xSemaphoreGive(xDataMutex);
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
+  }
+}
+
+void taskWebServer(void *pvParameters) {
+  for(;;) {
+    server.handleClient();
+    webSocket.loop();
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 
@@ -407,7 +551,7 @@ void configurarADC() {
 }
 
 void configurarControlBombas() {
-  // Configurar timer para LEDC
+  // Configurar Timer LEDC (PWM)
   ledc_timer_config_t timer_conf = {
       .speed_mode = LEDC_LOW_SPEED_MODE,
       .duty_resolution = LEDC_TIMER_8_BIT,
@@ -417,7 +561,7 @@ void configurarControlBombas() {
   };
   ledc_timer_config(&timer_conf);
 
-  // Configurar canal para bomba de riego
+  // Configurar Canal PWM - Bomba Riego
   ledc_channel_config_t channel_conf_riego = {
       .gpio_num = BOMBA_RIEGO_PIN,
       .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -428,7 +572,7 @@ void configurarControlBombas() {
   };
   ledc_channel_config(&channel_conf_riego);
 
-  // Configurar canal para bomba de nutrientes
+  // Configurar Canal PWM - Bomba Nutrientes
   ledc_channel_config_t channel_conf_nutrientes = {
       .gpio_num = BOMBA_NUTRIENTES_PIN,
       .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -467,25 +611,30 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         Serial.print("WiFi conectado. IP: ");
-        // Corregir el tipo de puntero para ip4addr_ntoa
+        // Conversión de dirección IP a string para log
         Serial.println(ip4addr_ntoa((const ip4_addr_t*)&event->ip_info.ip));
         xEventGroupSetBits(wifi_event_group, WIFI_CONNECTED_BIT);
     }
 }
 
 void configurarWiFiEficiente() {
-    wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    // Singleton: Evitar reinicialización si ya está configurado
+    static bool wifi_inicializado = false;
+    if (!wifi_inicializado) {
+        wifi_event_group = xEventGroupCreate();
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        esp_netif_create_default_wifi_sta();
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
-    esp_event_handler_instance_t instance_any_id;
-    esp_event_handler_instance_t instance_got_ip;
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
+        esp_event_handler_instance_t instance_any_id;
+        esp_event_handler_instance_t instance_got_ip;
+        ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
+        ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
+        wifi_inicializado = true;
+    }
 
     wifi_config_t wifi_config = {
         .sta = {
@@ -494,7 +643,7 @@ void configurarWiFiEficiente() {
             .pmf_cfg = {.capable = true, .required = false},
         },
     };
-    // Copiar SSID y password usando strcpy como requiere la API de ESP-IDF
+    // Configuración de credenciales WiFi (API ESP-IDF)
     strcpy((char*)wifi_config.sta.ssid, WIFI_SSID);
     strcpy((char*)wifi_config.sta.password, WIFI_PASSWORD);
 
@@ -504,31 +653,42 @@ void configurarWiFiEficiente() {
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MIN_MODEM)); // Ahorro de energía
 }
 
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+    // Callback para eventos WebSocket (opcional)
+}
+
 
 // ==================== FUNCIONES DE LÓGICA Y CONTROL ====================
 
 void restaurarEstadoRTC() {
-  // Esta función se llama si despertamos de deep sleep.
-  // El estado ya está en la variable rtcState.
-  // Lo que hacemos es copiarlo a las variables de trabajo en RAM.
+  // Recuperación del estado del sistema tras Deep Sleep.
+  // Los datos persisten en la memoria RTC (rtcState).
+  // Se copian a las variables de trabajo en RAM.
   modoActual = rtcState.modoActual;
   ultimoRiego = rtcState.ultimoRiego;
   Serial.printf("Estado restaurado desde RTC: Modo=%s, UltimoRiego=%lu\n", modoNombres[modoActual], ultimoRiego);
 }
 
 void entrarModoBajoConsumo() {
-    Serial.println("Modo ECO: Preparando para entrar en Deep Sleep.");
+    Serial.println("Modo ECO: Preparando sistema para Deep Sleep.");
     
-    // Sincronizar el estado actual a la variable RTC antes de dormir
+    // Apagar periféricos (LCD)
+    lcd.noDisplay();
+    lcd.noBacklight();
+    
+    // Persistencia: Guardar estado actual en memoria RTC
     rtcState.modoActual = modoActual;
     rtcState.ultimoRiego = ultimoRiego;
 
     Serial.printf("Guardando estado en RTC: Modo=%s, UltimoRiego=%lu\n", modoNombres[rtcState.modoActual], rtcState.ultimoRiego);
     
-    // Configurar el timer como la fuente para despertar
+    // Configurar fuente de despertar: Timer
     esp_sleep_enable_timer_wakeup(intervaloRiegoEco);
+
+    // Configurar fuente de despertar: Botón (GPIO Ext0)
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)BOTON_MODO_PIN, 0);
     
-    // Entrar en modo de sueño profundo
+    // Iniciar Deep Sleep
     esp_deep_sleep_start();
 }
 
@@ -547,7 +707,7 @@ void conectarWiFi() {
   
   configurarWiFiEficiente();
   
-  // Esperar a que el bit de conexión se active en el event group
+  // Esperar evento de conexión (con timeout)
   EventBits_t bits = xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(20000)); // 20 seg timeout
 
   if (bits & WIFI_CONNECTED_BIT) {
@@ -610,12 +770,12 @@ void procesarComando(String comando) {
 
 uint32_t leerADCCalibrado(adc1_channel_t channel) {
     uint32_t raw_reading = 0;
-    // Promediar múltiples lecturas para reducir ruido
+    // Oversampling: Promedio de lecturas para reducción de ruido
     for (int i = 0; i < 16; i++) {
         raw_reading += adc1_get_raw(channel);
     }
     raw_reading /= 16;
-    // Convertir lectura raw a milivoltios
+    // Conversión a voltaje usando calibración (eFuse)
     return esp_adc_cal_raw_to_voltage(raw_reading, &adc_chars);
 }
 
@@ -627,7 +787,7 @@ void leerSensores() {
   uint32_t ldr_mV = leerADCCalibrado(LDR_ADC_CHANNEL);
   uint32_t nivel_mV = leerADCCalibrado(NIVEL_POT_ADC_CHANNEL);
 
-  luzPorcentaje = map(ldr_mV, 0, 3100, 0, 100); // Rango de 0 a 3.1V con atenuación de 11dB
+  luzPorcentaje = map(ldr_mV, 0, 3100, 0, 100); // Mapeo 0-3.1V (Atenuación 11dB)
   nivelAguaPorcentaje = map(nivel_mV, 0, 3100, 0, 100);
 
   Serial.printf("Sensores -> T:%.1fC | H:%.1f%% | Luz:%d%% (%dmV) | Agua:%d%% (%dmV)\n", temperatura, humedad, luzPorcentaje, ldr_mV, nivelAguaPorcentaje, nivel_mV);
@@ -658,12 +818,12 @@ void ejecutarModoAuto(unsigned long tiempoActual) {
 void ejecutarModoEco(unsigned long tiempoActual) {
   bool debeRegar = (humedad < (umbralHumedadMin - 5)) && (luzPorcentaje >= (umbralLuzMin + 10));
   if (debeRegar) {
-      // En lugar de regar directamente, iniciamos la secuencia de riego y luego dormimos
+      // Iniciar secuencia de riego antes de dormir
       iniciarRiego(tiempoActual);
-      // La lógica de apagado de la bomba se ejecutará en la siguiente iteración de la tarea de control
-      // antes de ir a dormir.
+      // El apagado de la bomba se gestionará en la siguiente iteración
+      // antes de entrar en Deep Sleep.
   } else if (!bombaRiegoActiva) {
-      // Si no hay que regar y las bombas no están activas, entramos en bajo consumo.
+      // Si no hay actividad pendiente, entrar en Deep Sleep.
       entrarModoBajoConsumo();
   }
 
@@ -704,6 +864,20 @@ void actualizarBombas() {
 int pantallaActual = 0;
 const int NUM_PANTALLAS = 3;
 
+void publishOrBuffer(const char* topic, const char* payload) {
+  if (mqttClient.connected()) {
+    mqttClient.publish(topic, payload);
+  } else {
+    if (mqttMessageBuffer.size() < MQTT_BUFFER_MAX_SIZE) {
+      MqttMessage msg = {String(topic), String(payload)};
+      mqttMessageBuffer.push(msg);
+      Serial.println("MQTT desconectado. Mensaje guardado en buffer.");
+    } else {
+      Serial.println("Buffer MQTT lleno. Mensaje descartado.");
+    }
+  }
+}
+
 void actualizarLCD() {
   lcd.clear();
   float temp_lcd; int hum_lcd, luz_lcd, nivel_lcd, umbral_lcd;
@@ -736,7 +910,6 @@ void actualizarLCD() {
 }
 
 void publicarDatosMQTT() {
-  if (!mqttClient.connected()) return;
   char buffer[300];
   StaticJsonDocument<300> docSensores;
   docSensores["temperatura"] = temperatura;
@@ -744,20 +917,36 @@ void publicarDatosMQTT() {
   docSensores["luz"] = luzPorcentaje;
   docSensores["nivel_agua"] = nivelAguaPorcentaje;
   serializeJson(docSensores, buffer);
-  mqttClient.publish(TOPIC_SENSORES, buffer);
+  publishOrBuffer(TOPIC_SENSORES, buffer);
 
   StaticJsonDocument<200> docActuadores;
   docActuadores["bomba_riego"] = bombaRiegoActiva;
   docActuadores["bomba_nutrientes"] = bombaNutrientesActiva;
   serializeJson(docActuadores, buffer);
-  mqttClient.publish(TOPIC_ACTUADORES, buffer);
+  publishOrBuffer(TOPIC_ACTUADORES, buffer);
 
   StaticJsonDocument<200> docEstado;
   docEstado["modo"] = modoNombres[modoActual];
   docEstado["umbral_humedad"] = umbralHumedadMin;
   docEstado["wifi_conectado"] = (xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT);
   serializeJson(docEstado, buffer);
-  mqttClient.publish(TOPIC_ESTADO, buffer);
+  publishOrBuffer(TOPIC_ESTADO, buffer);
 
-  Serial.println("Datos publicados en MQTT");
+  Serial.println("MQTT: Datos publicados.");
+  
+  // Sincronización con Dashboard Web (WebSocket)
+  broadcastWebSocketData();
+}
+
+void broadcastWebSocketData() {
+  String json;
+  StaticJsonDocument<300> doc;
+  doc["temp"] = temperatura;
+  doc["hum"] = humedad;
+  doc["luz"] = luzPorcentaje;
+  doc["agua"] = nivelAguaPorcentaje;
+  doc["modo"] = modoNombres[modoActual];
+  doc["riego"] = bombaRiegoActiva;
+  serializeJson(doc, json);
+  webSocket.broadcastTXT(json);
 }

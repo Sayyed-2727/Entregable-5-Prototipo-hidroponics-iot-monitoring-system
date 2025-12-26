@@ -3,3 +3,4 @@ Adafruit Unified Sensor
 PubSubClient
 LiquidCrystal_I2C
 ArduinoJson
+    WebSockets
