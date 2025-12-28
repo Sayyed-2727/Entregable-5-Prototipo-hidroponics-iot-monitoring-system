@@ -810,6 +810,7 @@ void ejecutarModoAuto(unsigned long tiempoActual) {
     if (tiempoActual - tiempoInicioRiego >= duracionRiego) {
       bombaRiegoActiva = false; bombaNutrientesActiva = false;
       ultimoRiego = tiempoActual;
+      Serial.println("=== RIEGO FINALIZADO ===");
     }
     return;
   }
@@ -827,6 +828,7 @@ void ejecutarModoEco(unsigned long tiempoActual) {
     if (tiempoActual - tiempoInicioRiego >= duracionRiegoEco) {
       bombaRiegoActiva = false; bombaNutrientesActiva = false;
       ultimoRiego = tiempoActual;
+      Serial.println("=== RIEGO FINALIZADO ===");
     }
     return;
   }
