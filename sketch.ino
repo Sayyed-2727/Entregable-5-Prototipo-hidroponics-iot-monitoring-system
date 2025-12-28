@@ -221,6 +221,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 void broadcastWebSocketData();
 
 // --- Prototipos de Funciones de Lógica y Control ---
+void gestionarTransicionModo(Modo modoAnterior, Modo modoNuevo);
 void restaurarEstadoRTC();
 void entrarModoBajoConsumo();
 void mostrarMensajeBienvenida();
@@ -324,34 +325,24 @@ void setup() {
   gpio_isr_handler_add(BOTON_MODO_PIN, handleButtonInterrupt, NULL);
   Serial.println("Interrupción de botón (ESP-IDF) configurada.");
 
-  // Iniciar timer de hardware para la lógica de control solo si no estamos en modo ECO
-  if (modoActual != ECO) {
-    configurarTimerControl();
-    Serial.println("Timer de hardware para control lógico iniciado.");
-  } else {
-    configurarTimerControl(); // Configurar, pero no iniciar
-    timer_pause(TIMER_GROUP_0, TIMER_0);
-    Serial.println("Modo ECO: Timer de control configurado pero pausado.");
-  }
+  // Iniciar timer de hardware para la lógica de control
+  configurarTimerControl();
+  Serial.println("Timer de hardware para control lógico iniciado.");
 
   // --- Creación de Tareas FreeRTOS ---
   Serial.println("Creando tareas de FreeRTOS...");
   xTaskCreatePinnedToCore(taskMqttHandler, "MqttHandler", 4096, NULL, 2, &xTaskMqttHandlerHandle, 0);
   xTaskCreatePinnedToCore(taskReadSensors, "ReadSensors", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskReadControls, "ReadControls", 2048, NULL, 1, NULL, 1);
-  xTaskCreatePinnedToCore(taskButtonHandler, "ButtonHandler", 2048, NULL, 3, NULL, 1);
+  xTaskCreatePinnedToCore(taskButtonHandler, "ButtonHandler", 4096, NULL, 3, NULL, 1);
   xTaskCreatePinnedToCore(taskUpdateLcd, "UpdateLcd", 4096, NULL, 1, &xTaskUpdateLcdHandle, 1);
   xTaskCreatePinnedToCore(taskWebServer, "WebServer", 4096, NULL, 1, &xTaskWebServerHandle, 1);
   // Crear la tarea de control y guardar su handle para la notificación del timer
   xTaskCreatePinnedToCore(taskControlLogic, "ControlLogic", 4096, NULL, 2, &xTaskControlLogicHandle, 1);
   
   // GESTIÓN DE ENERGÍA CORRECTA:
-  // Si estamos en modo ECO, suspendemos inmediatamente las tareas que no deben correr
+  // Si estamos en modo ECO, la tarea del LCD se autogestionará.
   if (modoActual == ECO) {
-      Serial.println("Modo ECO: Suspendiendo tareas de comunicación y UI.");
-      vTaskSuspend(xTaskMqttHandlerHandle);
-      vTaskSuspend(xTaskUpdateLcdHandle);
-      vTaskSuspend(xTaskWebServerHandle);
       lcd.noBacklight();
       lcd.noDisplay();
   }
@@ -455,35 +446,8 @@ void taskButtonHandler(void *pvParameters) {
             nutrientesManualActivo = false;
           }
 
-          // Gestión de transiciones de energía (ECO vs Activo)
-          if (modoActual == ECO) {
-            // Entrando a ECO: Pausar timer y suspender tareas.
-            timer_pause(TIMER_GROUP_0, TIMER_0);
-            
-            // Suspender tareas de comunicación e interfaz
-            vTaskSuspend(xTaskMqttHandlerHandle);
-            vTaskSuspend(xTaskUpdateLcdHandle);
-            vTaskSuspend(xTaskWebServerHandle);
-            lcd.noBacklight();
-            lcd.noDisplay();
-            esp_wifi_stop(); // Apagar radio WiFi para ahorro máximo
-            
-            Serial.println("Modo ECO: Timer de control pausado.");
-          } else if (modoAnterior == ECO) {
-            // Saliendo de ECO: Reactivar timer y tareas.
-            timer_start(TIMER_GROUP_0, TIMER_0);
-            Serial.println("Saliendo de ECO: Timer de control reactivado.");
-            
-            // Reiniciar radio WiFi y reanudar tareas
-            esp_wifi_start();
-            vTaskResume(xTaskMqttHandlerHandle);
-            vTaskResume(xTaskUpdateLcdHandle);
-            vTaskResume(xTaskWebServerHandle);
-            
-            if (!(xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT)) {
-               conectarWiFi();
-            }
-          }
+          // GESTIÓN CENTRALIZADA de la transición
+          gestionarTransicionModo(modoAnterior, modoActual);
           
           xSemaphoreGive(xDataMutex);
         }
@@ -521,14 +485,18 @@ void taskControlLogic(void *pvParameters) {
 
 void taskUpdateLcd(void *pvParameters) {
   for (;;) {
+    // Esperar una notificación para actualizarse, con un timeout de 1 segundo
+    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000));
+
     if (xSemaphoreTake(xDataMutex, portMAX_DELAY) == pdTRUE) {
-      // Actualizar pantalla (esta tarea se suspende en modo ECO)
-      lcd.display();
-      lcd.backlight();
-      actualizarLCD();
+      // La tarea ahora se autogestiona: solo actualiza la pantalla si no está en modo ECO.
+      if (modoActual != ECO) {
+        lcd.display();
+        lcd.backlight();
+        actualizarLCD();
+      }
       xSemaphoreGive(xDataMutex);
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 }
 
@@ -657,8 +625,24 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
     // Callback para eventos WebSocket (opcional)
 }
 
-
 // ==================== FUNCIONES DE LÓGICA Y CONTROL ====================
+
+void gestionarTransicionModo(Modo modoAnterior, Modo modoNuevo) {
+  // --- Lógica para entrar en modo ECO ---
+  if (modoNuevo == ECO) {
+    Serial.println("Transición a ECO: Apagando LCD.");
+    lcd.noBacklight();
+    lcd.noDisplay();
+  } 
+  // --- Lógica para salir de modo ECO ---
+  else if (modoAnterior == ECO && modoNuevo != ECO) {
+    Serial.println("Transición desde ECO: Forzando actualización de UI.");
+    
+    // Forzar actualización inmediata para realimentación del usuario
+    xTaskNotifyGive(xTaskUpdateLcdHandle); 
+    publicarDatosMQTT();
+  }
+}
 
 void restaurarEstadoRTC() {
   // Recuperación del estado del sistema tras Deep Sleep.
@@ -755,15 +739,35 @@ void procesarComando(String comando) {
     Serial.println("Error al parsear JSON de comando"); return;
   }
   if (doc.containsKey("modo")) {
-    String modo = doc["modo"];
-    if (modo == "AUTO") modoActual = AUTO;
-    else if (modo == "ECO") modoActual = ECO;
-    else if (modo == "MANUAL") modoActual = MANUAL;
-    Serial.print("Modo cambiado vía MQTT a: "); Serial.println(modoNombres[modoActual]);
+    Modo modoAnterior = modoActual;
+    String modoStr = doc["modo"];
+    Modo modoNuevo = modoActual;
+
+    if (modoStr == "AUTO") modoNuevo = AUTO;
+    else if (modoStr == "ECO") modoNuevo = ECO;
+    else if (modoStr == "MANUAL") modoNuevo = MANUAL;
+
+    if (modoNuevo != modoAnterior) {
+      modoActual = modoNuevo;
+      Serial.print("Modo cambiado vía MQTT a: "); Serial.println(modoNombres[modoActual]);
+      gestionarTransicionModo(modoAnterior, modoActual);
+    }
   }
   if (modoActual == MANUAL) {
-    if (doc.containsKey("riego")) riegoManualActivo = doc["riego"];
-    if (doc.containsKey("nutrientes")) nutrientesManualActivo = doc["nutrientes"];
+    bool cambioManual = false;
+    if (doc.containsKey("riego")) {
+      riegoManualActivo = doc["riego"];
+      cambioManual = true;
+    }
+    if (doc.containsKey("nutrientes")) {
+      nutrientesManualActivo = doc["nutrientes"];
+      cambioManual = true;
+    }
+    // Si hubo un cambio manual, despertar a la tarea de control para que actúe de inmediato
+    if (cambioManual) {
+      xTaskNotifyGive(xTaskControlLogicHandle);
+      xTaskNotifyGive(xTaskUpdateLcdHandle);
+    }
   }
   if (doc.containsKey("umbral_humedad")) umbralHumedadMin = doc["umbral_humedad"];
 }
@@ -824,7 +828,7 @@ void ejecutarModoEco(unsigned long tiempoActual) {
       // antes de entrar en Deep Sleep.
   } else if (!bombaRiegoActiva) {
       // Si no hay actividad pendiente, entrar en Deep Sleep.
-      entrarModoBajoConsumo();
+      // entrarModoBajoConsumo(); // Desactivado para mantener el Dashboard online
   }
 
   // Lógica para apagar la bomba si estaba encendida
