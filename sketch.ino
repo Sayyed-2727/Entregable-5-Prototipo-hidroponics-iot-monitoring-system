@@ -143,7 +143,7 @@ unsigned long intervaloRiego = 30000;
 // Intervalo de despertar en modo ECO (microsegundos)
 uint64_t intervaloRiegoEco = 60000000; 
 unsigned long duracionRiego = 10000;
-unsigned long duracionRiegoEco = 5000;
+unsigned long duracionRiegoEco = 10000;
 
 // --- Variables de Temporización ---
 unsigned long tiempoInicioRiego = 0;
@@ -820,23 +820,22 @@ void ejecutarModoAuto(unsigned long tiempoActual) {
 }
 
 void ejecutarModoEco(unsigned long tiempoActual) {
-  bool debeRegar = (humedad < (umbralHumedadMin - 5)) && (luzPorcentaje >= (umbralLuzMin + 10));
-  if (debeRegar) {
-      // Iniciar secuencia de riego antes de dormir
-      iniciarRiego(tiempoActual);
-      // El apagado de la bomba se gestionará en la siguiente iteración
-      // antes de entrar en Deep Sleep.
-  } else if (!bombaRiegoActiva) {
-      // Si no hay actividad pendiente, entrar en Deep Sleep.
-      // entrarModoBajoConsumo(); // Desactivado para mantener el Dashboard online
+  if (nivelAguaPorcentaje < nivelAguaCritico) {
+    bombaRiegoActiva = false; bombaNutrientesActiva = false; return;
   }
-
-  // Lógica para apagar la bomba si estaba encendida
   if (bombaRiegoActiva) {
     if (tiempoActual - tiempoInicioRiego >= duracionRiegoEco) {
       bombaRiegoActiva = false; bombaNutrientesActiva = false;
       ultimoRiego = tiempoActual;
     }
+    return;
+  }
+  bool debeRegar = (humedad < (umbralHumedadMin - 5)) && (luzPorcentaje >= (umbralLuzMin + 10)) && (tiempoActual - ultimoRiego >= intervaloRiego);
+  if (debeRegar) {
+    iniciarRiego(tiempoActual);
+  } else if (!bombaRiegoActiva) {
+      // Si no hay actividad pendiente, entrar en Deep Sleep.
+      // entrarModoBajoConsumo(); // Desactivado para mantener el Dashboard online
   }
 }
 
