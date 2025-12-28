@@ -804,6 +804,9 @@ void leerPotenciometroControl() {
 
 void ejecutarModoAuto(unsigned long tiempoActual) {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
+    if (bombaRiegoActiva) {
+      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
+    }
     bombaRiegoActiva = false; bombaNutrientesActiva = false; return;
   }
   if (bombaRiegoActiva) {
@@ -822,6 +825,9 @@ void ejecutarModoAuto(unsigned long tiempoActual) {
 
 void ejecutarModoEco(unsigned long tiempoActual) {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
+    if (bombaRiegoActiva) {
+      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
+    }
     bombaRiegoActiva = false; bombaNutrientesActiva = false; return;
   }
   if (bombaRiegoActiva) {
@@ -843,6 +849,9 @@ void ejecutarModoEco(unsigned long tiempoActual) {
 
 void ejecutarModoManual() {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
+    if (riegoManualActivo || nutrientesManualActivo) {
+      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
+    }
     riegoManualActivo = false; nutrientesManualActivo = false;
   }
   bombaRiegoActiva = riegoManualActivo;
