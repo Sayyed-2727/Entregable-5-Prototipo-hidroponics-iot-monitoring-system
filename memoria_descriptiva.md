@@ -2,7 +2,7 @@
 
 **Autor:** Miguel Puch Paíno  
 **Autor:** Sayed Magdy Elsayed Abdellah  
-**Asignatura:** Sistemas Ciber-Físicos / Cyber-Physical Systems  
+**Asignatura:** Sistemas Ciber-Físicos
 **Máster:** Máster en Ingeniería Informática  
 **Fecha:** Diciembre 2025
 
