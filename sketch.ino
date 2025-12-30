@@ -254,18 +254,13 @@ void setup() {
   // Verificar la fuente de despertar (Wakeup Source)
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
   if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
-    Serial.println("Despertando de Deep Sleep (Timer).");
     restaurarEstadoRTC();
   } else if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
-    Serial.println("Despertando de Deep Sleep (Botón).");
     restaurarEstadoRTC();
     // Al despertar por botón, forzamos el cambio de modo para evitar
     // volver a dormir inmediatamente. Transición: ECO -> MANUAL.
     modoActual = MANUAL; 
     rtcState.modoActual = modoActual;
-  } else {
-    Serial.println("Inicio en frío (Power on).");
-    // Inicio normal: rtcState se inicializa con valores por defecto
   }
 
   // Sincronizar variables de RAM con el estado recuperado del RTC
@@ -274,13 +269,10 @@ void setup() {
 
   // --- Inicialización de periféricos ESP-IDF ---
   configurarADC();
-  Serial.println("ADC configurado para alta precisión.");
   configurarControlBombas();
-  Serial.println("PWM (LEDC) configurado para control de bombas.");
   
   // --- Inicialización de periféricos Arduino ---
   dht.begin();
-  Serial.println("DHT22 inicializado.");
   Wire.begin(21, 22);
   delay(100);
   lcd.init();
@@ -288,7 +280,6 @@ void setup() {
   if (modoActual != ECO) {
     lcd.backlight();
   }
-  Serial.println("LCD inicializado.");
   
   // Inicialización de comunicaciones (WiFi/MQTT/Web) si no es modo ECO
   if (modoActual != ECO || wakeup_reason != ESP_SLEEP_WAKEUP_TIMER) {
@@ -300,8 +291,6 @@ void setup() {
       server.begin();
       webSocket.begin();
       webSocket.onEvent(webSocketEvent);
-  } else {
-      Serial.println("Omitiendo conexión WiFi/MQTT en despertar ECO.");
   }
 
 
@@ -323,14 +312,11 @@ void setup() {
   };
   gpio_config(&io_conf);
   gpio_isr_handler_add(BOTON_MODO_PIN, handleButtonInterrupt, NULL);
-  Serial.println("Interrupción de botón (ESP-IDF) configurada.");
 
   // Iniciar timer de hardware para la lógica de control
   configurarTimerControl();
-  Serial.println("Timer de hardware para control lógico iniciado.");
 
   // --- Creación de Tareas FreeRTOS ---
-  Serial.println("Creando tareas de FreeRTOS...");
   xTaskCreatePinnedToCore(taskMqttHandler, "MqttHandler", 4096, NULL, 2, &xTaskMqttHandlerHandle, 0);
   xTaskCreatePinnedToCore(taskReadSensors, "ReadSensors", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(taskReadControls, "ReadControls", 2048, NULL, 1, NULL, 1);
@@ -347,7 +333,6 @@ void setup() {
       lcd.noDisplay();
   }
 
-  Serial.println("Sistema inicializado. El planificador de FreeRTOS tiene el control.");
   vTaskDelete(NULL); // La tarea setup finaliza, el scheduler toma el control
 }
 
@@ -432,8 +417,6 @@ void taskButtonHandler(void *pvParameters) {
 
       // 3. Verificación del estado físico del botón.
       if (gpio_get_level(BOTON_MODO_PIN) == 0) {
-        
-        Serial.println("Interrupt: Pulsación de botón confirmada.");
         
         // 4. Sección Crítica: Actualización del modo de operación.
         if (xSemaphoreTake(xDataMutex, portMAX_DELAY) == pdTRUE) {
@@ -574,7 +557,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
-        Serial.println("WiFi desconectado. Reintentando...");
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -630,14 +612,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 void gestionarTransicionModo(Modo modoAnterior, Modo modoNuevo) {
   // --- Lógica para entrar en modo ECO ---
   if (modoNuevo == ECO) {
-    Serial.println("Transición a ECO: Apagando LCD.");
     lcd.noBacklight();
     lcd.noDisplay();
   } 
   // --- Lógica para salir de modo ECO ---
   else if (modoAnterior == ECO && modoNuevo != ECO) {
-    Serial.println("Transición desde ECO: Forzando actualización de UI.");
-    
     // Forzar actualización inmediata para realimentación del usuario
     xTaskNotifyGive(xTaskUpdateLcdHandle); 
     publicarDatosMQTT();
@@ -685,7 +664,6 @@ void mostrarMensajeBienvenida() {
 }
 
 void conectarWiFi() {
-  Serial.print("Conectando a WiFi");
   lcd.clear();
   lcd.setCursor(0, 0); lcd.print("Conectando WiFi");
   
@@ -695,11 +673,9 @@ void conectarWiFi() {
   EventBits_t bits = xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(20000)); // 20 seg timeout
 
   if (bits & WIFI_CONNECTED_BIT) {
-    Serial.println("\nWiFi conectado (evento recibido)");
     lcd.clear();
     lcd.setCursor(0, 0); lcd.print("WiFi OK");
   } else {
-    Serial.println("\nError al conectar WiFi (timeout)");
     lcd.clear();
     lcd.setCursor(0, 0); lcd.print("WiFi ERROR");
   }
@@ -707,24 +683,19 @@ void conectarWiFi() {
 }
 
 void conectarMQTT() {
-  Serial.print("Conectando a MQTT...");
   String clientId = "ESP32_Nodo1_" + String(random(0xffff), HEX);
   if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASSWORD)) {
-    Serial.println("MQTT conectado");
     mqttClient.subscribe(TOPIC_COMANDO);
     if (xSemaphoreTake(xDataMutex, portMAX_DELAY) == pdTRUE) {
       publicarDatosMQTT();
       xSemaphoreGive(xDataMutex);
     }
-  } else {
-    Serial.print("Error MQTT, rc="); Serial.println(mqttClient.state());
   }
 }
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String mensaje = "";
   for (int i = 0; i < length; i++) { mensaje += (char)payload[i]; }
-  Serial.print("Mensaje recibido ["); Serial.print(topic); Serial.print("]: "); Serial.println(mensaje);
   if (String(topic) == TOPIC_COMANDO) {
     if (xSemaphoreTake(xDataMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       procesarComando(mensaje);
@@ -736,7 +707,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 void procesarComando(String comando) {
   StaticJsonDocument<200> doc;
   if (deserializeJson(doc, comando).code() != DeserializationError::Ok) {
-    Serial.println("Error al parsear JSON de comando"); return;
+    return;
   }
   if (doc.containsKey("modo")) {
     Modo modoAnterior = modoActual;
@@ -749,7 +720,7 @@ void procesarComando(String comando) {
 
     if (modoNuevo != modoAnterior) {
       modoActual = modoNuevo;
-      Serial.print("Modo cambiado vía MQTT a: "); Serial.println(modoNombres[modoActual]);
+      Serial.print("Modo cambiado vía Dashboard a: "); Serial.println(modoNombres[modoActual]);
       gestionarTransicionModo(modoAnterior, modoActual);
     }
   }
@@ -793,8 +764,6 @@ void leerSensores() {
 
   luzPorcentaje = map(ldr_mV, 0, 3100, 0, 100); // Mapeo 0-3.1V (Atenuación 11dB)
   nivelAguaPorcentaje = map(nivel_mV, 0, 3100, 0, 100);
-
-  Serial.printf("Sensores -> T:%.1fC | H:%.1f%% | Luz:%d%% (%dmV) | Agua:%d%% (%dmV)\n", temperatura, humedad, luzPorcentaje, ldr_mV, nivelAguaPorcentaje, nivel_mV);
 }
 
 void leerPotenciometroControl() {
@@ -804,9 +773,6 @@ void leerPotenciometroControl() {
 
 void ejecutarModoAuto(unsigned long tiempoActual) {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
-    if (bombaRiegoActiva) {
-      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
-    }
     bombaRiegoActiva = false; bombaNutrientesActiva = false; return;
   }
   if (bombaRiegoActiva) {
@@ -825,9 +791,6 @@ void ejecutarModoAuto(unsigned long tiempoActual) {
 
 void ejecutarModoEco(unsigned long tiempoActual) {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
-    if (bombaRiegoActiva) {
-      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
-    }
     bombaRiegoActiva = false; bombaNutrientesActiva = false; return;
   }
   if (bombaRiegoActiva) {
@@ -849,9 +812,6 @@ void ejecutarModoEco(unsigned long tiempoActual) {
 
 void ejecutarModoManual() {
   if (nivelAguaPorcentaje < nivelAguaCritico) {
-    if (riegoManualActivo || nutrientesManualActivo) {
-      Serial.println("ALERTA: Nivel de agua bajo. Riego detenido.");
-    }
     riegoManualActivo = false; nutrientesManualActivo = false;
   }
   bombaRiegoActiva = riegoManualActivo;
@@ -885,9 +845,6 @@ void publishOrBuffer(const char* topic, const char* payload) {
     if (mqttMessageBuffer.size() < MQTT_BUFFER_MAX_SIZE) {
       MqttMessage msg = {String(topic), String(payload)};
       mqttMessageBuffer.push(msg);
-      Serial.println("MQTT desconectado. Mensaje guardado en buffer.");
-    } else {
-      Serial.println("Buffer MQTT lleno. Mensaje descartado.");
     }
   }
 }
@@ -932,6 +889,9 @@ void publicarDatosMQTT() {
   docSensores["nivel_agua"] = nivelAguaPorcentaje;
   serializeJson(docSensores, buffer);
   publishOrBuffer(TOPIC_SENSORES, buffer);
+  
+  Serial.printf("Datos a publicar: T:%.1f°C | H:%.1f%% | Luz:%d%% | Agua:%d%%\n", 
+                temperatura, humedad, luzPorcentaje, nivelAguaPorcentaje);
 
   StaticJsonDocument<200> docActuadores;
   docActuadores["bomba_riego"] = bombaRiegoActiva;
@@ -945,8 +905,6 @@ void publicarDatosMQTT() {
   docEstado["wifi_conectado"] = (xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT);
   serializeJson(docEstado, buffer);
   publishOrBuffer(TOPIC_ESTADO, buffer);
-
-  Serial.println("MQTT: Datos publicados.");
   
   // Sincronización con Dashboard Web (WebSocket)
   broadcastWebSocketData();
