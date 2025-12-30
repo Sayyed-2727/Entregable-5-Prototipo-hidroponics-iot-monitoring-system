@@ -24,7 +24,7 @@ graph TD
 
         subgraph "Interfaz Local"
             direction RL
-            ESP32 -->|I2C (0x27)| LCD(LCD 16x2)
+            ESP32 -->|I2C 0x27| LCD["LCD 16x2"]
         end
 
         ESP32(ESP32<br>Microcontrolador)

@@ -84,7 +84,12 @@ graph TD
 
 2.  **Broker MQTT (HiveMQ):** Se utiliza un broker MQTT público (`broker.hivemq.com`). Actúa como intermediario, recibiendo todos los mensajes publicados por el ESP32 y distribuyéndolos a cualquier cliente suscrito. Este desacoplamiento permite que el nodo IoT y la interfaz de usuario no necesiten conocerse directamente.
 
-3.  **Dashboard Web (Cliente):** Es una aplicación de una sola página (SPA) construida con HTML, CSS y JavaScript. Se conecta al broker MQTT a través de **WebSockets** (`ws://broker.hivemq.com:8000/mqtt`). Se suscribe a los topics de sensores, actuadores y estado para recibir los datos en tiempo real y actualizar la interfaz gráfica. Cuando el usuario interactúa con los controles (ej. cambia de modo), la aplicación publica un mensaje JSON en el topic de comandos.
+3.  **Dashboard Web (Cliente):** Es una aplicación de una sola página construida en HTML, CSS y JavaScript.
+4.  **Dashboard (Node-Red):** El sistema incluye un dashboard desarrollado en Node-Red que se conecta al broker MQTT. Node-Red actúa como middleware que:
+   - Se suscribe a los topics de sensores, actuadores y estado para recibir datos en tiempo real
+   - Publica comandos en el topic `invernadero/nodo1/comando` cuando el usuario interactúa con los controles
+   - Presenta una interfaz web gráfica en `http://localhost:1880/ui` con gauges, botones y visualizaciones
+   - Permite cambiar entre los modos de operación (AUTO, ECO, MANUAL) de forma intuitiva
 
 ---
 
@@ -133,6 +138,17 @@ El prototipo es 100% funcional y reproducible utilizando el simulador online Wok
 /
 ├── sketch.ino              # Firmware del ESP32 (C++, FreeRTOS, ESP-IDF)
 ├── index.html              # Estructura del dashboard web
+├── FlowsModelInNodeRed.json # Flujo de Node-Red para dashboard
+├── index.html              # Dashboard web alternativo (HTML5)
+├── script.js               # Lógica del dashboard web (MQTT.js)
+├── style.css               # Estilos del dashboard web
+├── diagram.json            # Diagrama de conexiones Wokwi
+├── wokwi.toml              # Configuración del proyecto Wokwi
+├── libraries.txt           # Dependencias de bibliotecas Arduino
+├── README.md               # Documentación del proyecto
+├── memoria_descriptiva.md  # Este documento
+└── System_Architecture.md  # Diagramas de arquitectura
+```
 ├── style.css               # Estilos CSS para el dashboard
 ├── script.js               # Lógica del frontend (MQTT sobre WebSockets)
 ├── diagram.json            # Definición del circuito para Wokwi
@@ -153,8 +169,8 @@ Las instrucciones detalladas se encuentran en el archivo `README.md`. A continua
 2.  **Lanzamiento del Dashboard Web:**
     *   Tener Python 3 instalado.
     *   Abrir una terminal en la carpeta raíz del proyecto.
-    *   Ejecutar el comando: `python -m http.server 8000`.
-    *   Abrir un navegador web y acceder a `http://localhost:8000`.
+    *   Ejecutar el comando: `python -m http.server 8000` o `node-red`
+    *   Abrir un navegador web y acceder a `http://localhost:8000` o a `http://localhost:1880/ui`
 
 El dashboard se conectará automáticamente al broker MQTT y comenzará a mostrar los datos de la simulación en tiempo real.
 
@@ -180,16 +196,29 @@ El dashboard se conectará automáticamente al broker MQTT y comenzará a mostra
 La lógica de control se implementa como una máquina de estados finita con tres estados principales, gestionada por la variable `modoActual`.
 
 ```mermaid
-graph TD
-    subgraph "Máquina de Estados del Sistema"
-        AUTO --"Pulsar Botón / Comando MQTT"--> ECO
-        ECO --"Pulsar Botón / Comando MQTT"--> MANUAL
-        MANUAL --"Pulsar Botón / Comando MQTT"--> AUTO
-    end
-
-    state "Modo AUTO" as AUTO
-    state "Modo ECO" as ECO
-    state "Modo MANUAL" as MANUAL
+stateDiagram-v2
+    [*] --> AUTO
+    AUTO --> ECO : Pulsar Botón / Comando MQTT
+    ECO --> MANUAL : Pulsar Botón / Comando MQTT
+    MANUAL --> AUTO : Pulsar Botón / Comando MQTT
+    
+    state AUTO {
+        [*] --> Evaluando
+        Evaluando --> Regando : Condiciones cumplidas
+        Regando --> Evaluando : Riego finalizado
+    }
+    
+    state ECO {
+        [*] --> EvaluandoEco
+        EvaluandoEco --> RegandoEco : Condiciones estrictas cumplidas
+        RegandoEco --> EvaluandoEco : Riego finalizado
+    }
+    
+    state MANUAL {
+        [*] --> Esperando
+        Esperando --> ControlUsuario : Usuario activa bombas
+        ControlUsuario --> Esperando : Usuario desactiva
+    }
 ```
 
 *Figura 3: Diagrama de la máquina de estados de los modos de operación.*

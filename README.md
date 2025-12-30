@@ -2,7 +2,8 @@
 
 Sistema completo de monitoreo y control automático para invernadero hidropónico basado en ESP32, con simulación en Wokwi, comunicación MQTT y dashboard web en tiempo real.
 
-**Autor:** Miguel Puch Paíno  
+**Autor:** Miguel Puch Paíno
+**Autor:** Sayed Magdy Elsayed Abdellah   
 **Fecha:** Diciembre 2025
 
 ---
@@ -225,7 +226,7 @@ ENTONCES:
 ### Requisitos Previos
 
 - ✅ Navegador web moderno (Chrome, Edge, Firefox)
-- ✅ Python 3.x instalado
+- ✅ Node.js y npm instalados (para Node-Red)
 - ✅ Cuenta en Wokwi.com (gratuita)
 
 ### Paso 1: Ejecutar Simulación en Wokwi Web
@@ -263,25 +264,64 @@ ENTONCES:
      T:24.00°C H:45.00% Luz:24% Agua:6%
      Datos publicados en MQTT
      ```
-
-### Paso 2: Iniciar Dashboard Web
+### Paso 2-A: Iniciar Dashboard Web
 
 1. **Abrir terminal en la carpeta del proyecto**
 
-2. **Iniciar servidor HTTP:**
-   ```bash
-   python -m http.server 8000
-   ```
+2. **Iniciar servidor HTTP**
 
 3. **Abrir navegador:**
-   - Ir a: http://localhost:8000
+   - Ir a http://localhost:8000
    - Debería aparecer el dashboard
-   - Verificar: "MQTT Conectado" (verde)
+   - Verificar: "MQTT Conectado" (verde) 
 
-4. **Verificar datos:**
-   - Los valores de sensores deben aparecer automáticamente
-   - Revisar "Registro de Eventos" para mensajes
 
+### Paso 2-B: Configurar e Iniciar Node-Red Dashboard
+
+#### 2.1 Instalar Node-Red (si no lo tienes instalado)
+
+```bash
+npm install -g --unsafe-perm node-red
+```
+
+#### 2.2 Iniciar Node-Red
+
+```bash
+node-red
+```
+
+Verás un mensaje indicando que Node-Red está ejecutándose en `http://localhost:1880`
+
+#### 2.3 Acceder a la interfaz de Node-Red
+
+1. **Abrir navegador y ir a:**
+   ```
+   http://localhost:1880
+   ```
+
+2. **Importar el flujo:**
+   - Click en el menú hamburguesa (≡) en la esquina superior derecha
+   - Seleccionar **Import** → **Clipboard**
+   - Click en **select a file to import**
+   - Seleccionar el archivo `FlowsModelInNodeRed.json` del proyecto
+   - Click en **Import**
+
+#### 2.4 Instalar node-red-dashboard
+
+1. **En la interfaz de Node-Red:**
+   - Click en el menú hamburguesa (≡)
+   - Seleccionar **Manage palette**
+   - Ir a la pestaña **Install**
+   - Buscar: `node-red-dashboard`
+   - Click en **Install** junto a `node-red-dashboard`
+   - Confirmar la instalación
+
+#### 2.5 Acceder al Dashboard
+
+1. **Abrir navegador y ir a:**
+   ```
+   http://localhost:1880/ui
+   ```
 ---
 
 ## 🎯 Interacción con el Sistema
