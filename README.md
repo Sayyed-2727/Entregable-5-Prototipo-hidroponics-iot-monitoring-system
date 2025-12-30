@@ -419,11 +419,13 @@ Entregable-5-Prototipo-hidroponics-iot-monitoring-system/
 ├── diagram.json            # Circuito Wokwi (componentes y conexiones)
 ├── libraries.txt           # Dependencias Arduino
 ├── wokwi.toml             # Configuración Wokwi
-│
+├── FlowsModelInNodeRed.json # Flujo de Node-Red para dashboard
 ├── index.html             # Dashboard web (estructura)
 ├── style.css              # Estilos dashboard
 ├── script.js              # Lógica MQTT y frontend
 │
+├── memoria_descriptiva.md  # Este documento
+├── System_Architecture.md  # Diagramas de arquitectura
 └── README.md              # Esta documentación
 ```
 
