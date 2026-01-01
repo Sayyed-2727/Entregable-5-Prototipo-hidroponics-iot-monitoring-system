@@ -268,7 +268,7 @@ ENTONCES:
 
 1. **Abrir terminal en la carpeta del proyecto**
 
-2. **Iniciar servidor HTTP**
+2. **Iniciar servidor HTTP**: Ejecutar el comando python -m http.server 8000
 
 3. **Abrir navegador:**
    - Ir a http://localhost:8000
