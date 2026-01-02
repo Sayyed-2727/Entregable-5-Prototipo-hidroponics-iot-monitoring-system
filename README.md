@@ -268,9 +268,14 @@ ENTONCES:
 
 1. **Abrir terminal en la carpeta del proyecto**
 
-2. **Iniciar servidor HTTP**: Ejecutar el comando python -m http.server 8000
+2. **Iniciar servidor HTTP**:
 
-3. **Abrir navegador:**
+   A través de ejecutar el siguiente comando:
+   
+   ```
+   python -m http.server 8000
+   ```
+4. **Abrir navegador:**
    - Ir a http://localhost:8000
    - Debería aparecer el dashboard
    - Verificar: "MQTT Conectado" (verde) 
