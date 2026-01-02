@@ -289,10 +289,13 @@ ENTONCES:
 npm install -g --unsafe-perm node-red
 ```
 
-#### 2.2 Iniciar Node-Red
+#### 2.2 Iniciar Node-Red con tu archivo de flujos
+
+Desde la carpeta de tu proyecto, ejecuta el siguiente comando para que Node-RED cargue tu configuración:
 
 ```bash
-node-red
+node-red FlowsModelInNodeRed.json
+
 ```
 
 Verás un mensaje indicando que Node-Red está ejecutándose en `http://localhost:1880`
@@ -300,11 +303,14 @@ Verás un mensaje indicando que Node-Red está ejecutándose en `http://localhos
 #### 2.3 Acceder a la interfaz de Node-Red
 
 1. **Abrir navegador y ir a:**
+
+Una vez que Node-RED se esté ejecutando, puedes acceder a tu dashboard en un navegador web. La URL predeterminada es:
+
    ```
-   http://localhost:1880
+   http://127.0.0.1:1880/ui
    ```
 
-2. **Importar el flujo:**
+3. **Importar el flujo:**
    - Click en el menú hamburguesa (≡) en la esquina superior derecha
    - Seleccionar **Import** → **Clipboard**
    - Click en **select a file to import**
